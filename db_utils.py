@@ -87,6 +87,7 @@ class Instrument(Base):
     year           = Column(Integer)
     description    = Column(Text)
     source_urls    = Column(JSON, default=list)
+    source_snippets = Column(JSON, default=dict)  # {url: {title, snippet}}
     created_at     = Column(DateTime(timezone=True), default=_now)
     updated_at     = Column(DateTime(timezone=True), default=_now)
 
@@ -119,6 +120,7 @@ def load_instruments() -> list[dict]:
                 "year": r.year,
                 "description": r.description or "",
                 "source_urls": r.source_urls or [],
+                "source_snippets": r.source_snippets or {},
             }
             for r in rows
         ]

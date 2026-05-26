@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import streamlit as st
 
@@ -124,11 +125,45 @@ def render_instrument_detail(inst: dict) -> None:
     else:
         st.caption("*(no description stored)*")
     st.markdown("")
+    name = inst["name"]
     urls = inst["source_urls"]
+    snips = inst.get("source_snippets", {})
     if urls:
+        # "Find official source" — opens a targeted Google search
+        search_q = quote_plus(f'"{name}" official text')
+        st.markdown(
+            f'[🔍 Find official source](https://www.google.com/search?q={search_q})',
+        )
+        st.markdown("")
         with st.expander(f"Source URLs ({len(urls)})"):
             for url in urls:
-                st.markdown(f"- [{url}]({url})")
+                snip_data = snips.get(url, {})
+                title   = snip_data.get("title") or ""
+                snippet = snip_data.get("snippet", "")
+                # Text Fragment URL — Chrome/Edge scroll-to-highlight
+                frag_url = url + "#:~:text=" + quote_plus(name[:60])
+                display_title = title if title else url
+                st.markdown(f"**[{display_title}]({frag_url})**")
+                if not title:
+                    # Already showed URL as title; nothing more to show
+                    pass
+                else:
+                    # Show the raw URL as a small caption beneath the title
+                    st.markdown(
+                        f'<div style="font-size:0.78em;color:#888;margin:-4px 0 2px 0;'
+                        f'word-break:break-all;">{url}</div>',
+                        unsafe_allow_html=True,
+                    )
+                if snippet:
+                    st.markdown(
+                        f'<div style="font-size:0.85em;color:#444;'
+                        f'border-left:3px solid #ccc;padding:3px 10px;'
+                        f'margin:2px 0 10px 0;font-style:italic;">'
+                        f'{snippet}</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown('<div style="margin-bottom:8px;"></div>', unsafe_allow_html=True)
 
 
 def render_criteria_card(criteria: dict) -> None:
