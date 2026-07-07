@@ -100,6 +100,8 @@ class InstrumentAnnotation(Base):
     annotator_id    = Column(String(64), nullable=False)
     label           = Column(String(32))   # Keep | Drop | Review | NULL
     notes           = Column(Text)
+    category        = Column(String(128))  # free-text, drawn from a shared dropdown
+    tags            = Column(JSON, default=list)  # list[str], drawn from a shared dropdown
     annotated_at    = Column(DateTime(timezone=True), default=_now)
     updated_at      = Column(DateTime(timezone=True), default=_now)
 
@@ -144,6 +146,8 @@ def load_my_annotations(annotator_id: str) -> dict[str, dict]:
             r.instrument_name: {
                 "label": r.label,
                 "notes": r.notes or "",
+                "category": r.category,
+                "tags": r.tags or [],
                 "annotated_at": r.annotated_at.isoformat() if r.annotated_at else "",
             }
             for r in rows
@@ -152,10 +156,18 @@ def load_my_annotations(annotator_id: str) -> dict[str, dict]:
         session.close()
 
 
-def save_annotation(instrument_name: str, annotator_id: str, label: str | None, notes: str) -> None:
+def save_annotation(
+    instrument_name: str,
+    annotator_id: str,
+    label: str | None,
+    notes: str,
+    category: str | None = None,
+    tags: list[str] | None = None,
+) -> None:
     """Upsert one annotation row."""
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     now = datetime.now(timezone.utc)
+    tags = tags or []
     session = _get_session()
     try:
         stmt = pg_insert(InstrumentAnnotation).values(
@@ -163,11 +175,13 @@ def save_annotation(instrument_name: str, annotator_id: str, label: str | None, 
             annotator_id=annotator_id,
             label=label,
             notes=notes,
+            category=category,
+            tags=tags,
             annotated_at=now,
             updated_at=now,
         ).on_conflict_do_update(
             index_elements=["instrument_name", "annotator_id"],
-            set_=dict(label=label, notes=notes, updated_at=now),
+            set_=dict(label=label, notes=notes, category=category, tags=tags, updated_at=now),
         )
         session.execute(stmt)
         session.commit()
@@ -176,6 +190,39 @@ def save_annotation(instrument_name: str, annotator_id: str, label: str | None, 
         st.error(f"Save failed: {e}")
     finally:
         session.close()
+
+
+def get_category_options() -> list[str]:
+    """Distinct non-null categories saved by any annotator, sorted — the shared dropdown vocabulary."""
+    session = _get_session()
+    try:
+        rows = (
+            session.query(InstrumentAnnotation.category)
+            .filter(InstrumentAnnotation.category.isnot(None))
+            .distinct()
+            .all()
+        )
+        return sorted({r[0] for r in rows if r[0]})
+    finally:
+        session.close()
+
+
+def get_tag_options() -> list[str]:
+    """Distinct tags saved by any annotator, sorted — the shared dropdown vocabulary."""
+    session = _get_session()
+    try:
+        rows = (
+            session.query(InstrumentAnnotation.tags)
+            .filter(InstrumentAnnotation.tags.isnot(None))
+            .all()
+        )
+    finally:
+        session.close()
+    tags: set[str] = set()
+    for (tag_list,) in rows:
+        if tag_list:
+            tags.update(tag_list)
+    return sorted(tags)
 
 
 def get_others_decisions(instrument_name: str, annotator_id: str) -> list[tuple[str, str]]:

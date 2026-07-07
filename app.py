@@ -30,6 +30,8 @@ from db_utils import (
     save_annotation,
     get_others_decisions,
     get_irr_stats,
+    get_category_options,
+    get_tag_options,
 )
 
 # ── Paths ─────────────────────────────────────────────────────────────────
@@ -185,6 +187,7 @@ def build_export(instruments: list[dict], annotations: dict, annotator_id: str) 
         results.append({
             "id": inst["id"], "name": inst["name"],
             "label": label, "notes": ann.get("notes", ""),
+            "category": ann.get("category"), "tags": ann.get("tags", []),
             "instrument_type": inst["instrument_type"], "year": inst["year"],
             "description": inst["description"], "source_urls": inst["source_urls"],
             "annotated_at": ann.get("annotated_at", ""),
@@ -203,6 +206,10 @@ def build_export(instruments: list[dict], annotations: dict, annotator_id: str) 
     def item_md(r: dict) -> str:
         lines = [f"### {r['name']}",
                  f"- **Type:** {r['instrument_type']}" + (f"  |  **Year:** {r['year']}" if r["year"] else "")]
+        if r["category"]:
+            lines.append(f"- **Category:** {r['category']}")
+        if r["tags"]:
+            lines.append(f"- **Tags:** {', '.join(r['tags'])}")
         if r["notes"]:
             lines.append(f"- **Notes:** {r['notes']}")
         return "\n".join(lines)
@@ -245,10 +252,16 @@ def init_state(instruments: list[dict], annotator_id: str) -> None:
         )
 
 
-def apply_label(name: str, label: str, notes: str, instruments: list[dict], idx: int, annotator_id: str) -> None:
+def apply_label(
+    name: str, label: str, notes: str, category: str | None, tags: list[str],
+    instruments: list[dict], idx: int, annotator_id: str,
+) -> None:
     ann = st.session_state.annotations
-    ann[name] = {"label": label, "notes": notes, "annotated_at": datetime.now(timezone.utc).isoformat()}
-    save_annotation(name, annotator_id, label, notes)
+    ann[name] = {
+        "label": label, "notes": notes, "category": category, "tags": tags,
+        "annotated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    save_annotation(name, annotator_id, label, notes, category, tags)
     for j in range(idx + 1, len(instruments)):
         if "label" not in ann.get(instruments[j]["name"], {}):
             st.session_state.current_idx = j; return
@@ -451,6 +464,41 @@ def main() -> None:
 
         st.markdown("")
 
+        # Category (single-select, shared vocabulary across annotators)
+        category_key = f"category_{idx}"
+        current_category = current_ann.get("category")
+        category_options = get_category_options()
+        if current_category and current_category not in category_options:
+            category_options = sorted(category_options + [current_category])
+        if category_key not in st.session_state:
+            st.session_state[category_key] = current_category
+
+        st.markdown("**Category**")
+        category_val = st.selectbox(
+            "category", options=category_options, key=category_key,
+            accept_new_options=True, placeholder="Select or type a new category…",
+            label_visibility="collapsed",
+        )
+
+        # Tags (multi-select, shared vocabulary across annotators)
+        tags_key = f"tags_{idx}"
+        current_tags = current_ann.get("tags", [])
+        tag_options = get_tag_options()
+        extra_tags = [t for t in current_tags if t not in tag_options]
+        if extra_tags:
+            tag_options = sorted(tag_options + extra_tags)
+        if tags_key not in st.session_state:
+            st.session_state[tags_key] = current_tags
+
+        st.markdown("**Tags**")
+        tags_val = st.multiselect(
+            "tags", options=tag_options, key=tags_key,
+            accept_new_options=True, placeholder="Select or type new tags…",
+            label_visibility="collapsed",
+        )
+
+        st.markdown("")
+
         # Notes
         notes_key = f"notes_{idx}"
         if notes_key not in st.session_state:
@@ -462,7 +510,7 @@ def main() -> None:
             label_visibility="collapsed")
 
         st.markdown("")
-        st.markdown("**Decision** — saves notes and advances to next unannotated")
+        st.markdown("**Decision** — saves notes/category/tags and advances to next unannotated")
 
         b1, b2, b3 = st.columns(3)
         with b1:
@@ -478,18 +526,20 @@ def main() -> None:
                 type="primary" if cur_label == "Review" else "secondary",
                 help=LABEL_HELP["Review"], key="btn_review")
 
-        if keep:   apply_label(name, "Keep",   notes_val, instruments, idx, annotator_id); st.rerun()
-        if drop:   apply_label(name, "Drop",   notes_val, instruments, idx, annotator_id); st.rerun()
-        if review: apply_label(name, "Review", notes_val, instruments, idx, annotator_id); st.rerun()
+        if keep:   apply_label(name, "Keep",   notes_val, category_val, tags_val, instruments, idx, annotator_id); st.rerun()
+        if drop:   apply_label(name, "Drop",   notes_val, category_val, tags_val, instruments, idx, annotator_id); st.rerun()
+        if review: apply_label(name, "Review", notes_val, category_val, tags_val, instruments, idx, annotator_id); st.rerun()
 
         st.divider()
 
-        if st.button("💾 Save notes (no label change)", use_container_width=True, key="btn_save_notes"):
+        if st.button("💾 Save notes / category / tags (no label change)", use_container_width=True, key="btn_save_notes"):
             entry = ann.get(name, {})
             entry["notes"] = notes_val
+            entry["category"] = category_val
+            entry["tags"] = tags_val
             ann[name] = entry
-            save_annotation(name, annotator_id, cur_label, notes_val)
-            st.success("Notes saved.")
+            save_annotation(name, annotator_id, cur_label, notes_val, category_val, tags_val)
+            st.success("Saved.")
 
         if st.button("⏭ Next unannotated", use_container_width=True, key="btn_skip"):
             for j in range(idx + 1, len(instruments)):
@@ -505,7 +555,7 @@ def main() -> None:
         if cur_label:
             if st.button("↩ Clear label", use_container_width=True, key="btn_clear"):
                 ann.pop(name, None)
-                save_annotation(name, annotator_id, None, "")
+                save_annotation(name, annotator_id, None, "", None, [])
                 st.rerun()
 
 
